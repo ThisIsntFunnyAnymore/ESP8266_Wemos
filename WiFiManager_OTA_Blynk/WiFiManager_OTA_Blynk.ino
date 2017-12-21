@@ -92,9 +92,16 @@ void deviceFallback() {
     Blynk.virtualWrite(V0, false);
     //local instance of WiFiManager
     WiFiManager wifiManager;
-    wifiManager.resetSettings();
-    SPIFFS.format();
-    ESP.restart();
+     if (!wifiManager.startConfigPortal("OnDemandAP")) {
+        Serial.println("failed to connect and hit timeout");
+        delay(3000);
+        ESP.reset();
+        delay(5000);
+     }
+     Serial.println("connected...yeey :)");
+    //wifiManager.resetSettings();
+    //SPIFFS.format();
+    //ESP.restart();
 
   } else {
     terminal.println(F("Cannot reset WiFi with Safety on."));
