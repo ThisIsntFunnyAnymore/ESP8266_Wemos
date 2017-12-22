@@ -24,10 +24,17 @@
 
    Note: Currently the following pins are in use in the sketch:
       - V0:   Terminal widget
+      - V2-V9: 4051 Outputs
       - V124: safety for WiFiManager reset
       - V125: trigger for WiFiManager reset
       - V126: WiFi Signal Strength
       - V127: Uptime in Seconds
+
+   For Wemos (apparently same for nodeMCU), stay away from:
+      - GPIO16   D0
+      - GPIO0    D3
+      - GPIO2    D4
+      - GPIO15   D8
  * ****************************************************************************/
 
 #include <FS.h>                   //this needs to be first, or it all crashes and burns...
@@ -52,6 +59,18 @@ char esp_hostname[20] = "esp8266_Device";
 
 //flag for saving data
 bool shouldSaveConfig = false;
+
+// Pin Definitions
+const int selectPins[3] = {14, 12, 13}; // S0~D5, S1~D6, S2~D7
+const int zPower = 4; //D2,
+const int zInput = A0; // Connect common (Z) to A0 (analog input)
+const int vPinOffset = 2; //map virtual pins to 4051 channels
+
+/***Uncomment if using smoothing function*************/
+//const int filterWeight = 4; // higher numbers = more filtering.
+//// 4 = 1/4^4 = 1/64 = 0.016, ~ eta 0.1
+//const int numReadings = 10; // number of readings to smooth
+/************************************************************/
 
 //Blynk definitions
 BlynkTimer timer;
@@ -88,35 +107,77 @@ void deviceFallback() {
       terminal.print(i);
       terminal.print("...");
       delay(1000);
-    terminal.flush();
+      terminal.flush();
     }
 
     // I don't think Blynk can do this.
     Blynk.virtualWrite(V124, LOW);
     Blynk.virtualWrite(V125, LOW);
     Blynk.syncAll();
-    
-// Kinder, gentler reset
+
+    // Kinder, gentler reset
     //local instance of WiFiManager
     WiFiManager wifiManager;
-//    if (!wifiManager.startConfigPortal("AutoConnectAP", "password")) {
-//      Serial.println("failed to connect and hit timeout");
-//      delay(3000);
-//      ESP.reset();
-//      delay(5000);
-//    }
-//    Serial.println("connected...yeey :)");
+    //    if (!wifiManager.startConfigPortal("AutoConnectAP", "password")) {
+    //      Serial.println("failed to connect and hit timeout");
+    //      delay(3000);
+    //      ESP.reset();
+    //      delay(5000);
+    //    }
+    //    Serial.println("connected...yeey :)");
 
-// Nuclear reset
+    // Nuclear reset
     wifiManager.resetSettings();
     SPIFFS.format();
     ESP.reset();  //use instead of ESP.restart to allow resetting without pressing button
-//    ESP.restart();
+    //    ESP.restart();
 
   } else {
     terminal.println(F("Cannot reset WiFi with Safety on."));
   }
 }
+
+// The selectMuxPin function sets the S0, S1, and S2 pins
+// accordingly, given a pin from 0-7.
+void selectMuxPin(byte pin)
+{
+  for (int i = 0; i < 3; i++)
+  {
+    if (pin & (1 << i))
+      digitalWrite(selectPins[i], HIGH);
+    else
+      digitalWrite(selectPins[i], LOW);
+  }
+}
+
+void getAnalog()
+{
+  // Power on the soil sensors and give a moment to breathe
+  digitalWrite(zPower, HIGH);
+  delay(1000);
+  // Loop through all eight pins.
+  for (byte pin = 0; pin <= 7; pin++)
+  {
+    selectMuxPin(pin); // Select one at a time
+    // get an exponentially smoothed average
+    int inputValue = analogRead(zInput); // initialize average
+    //***Rolling average with exponential smoothing***/
+    //    for (int i = 0; i < numReadings; i++) {
+    //      //int inputValue = analogRead(zInput); // Initiand read A0
+    //      //admittedly the bitshift is a bit obscure but it works.
+    //      inputValue = inputValue + (analogRead(zInput) - inputValue) >> filterWeight;
+    //    }
+    //************************************************/
+    Serial.print(String(inputValue) + "\t");
+    Blynk.virtualWrite(pin + vPinOffset, inputValue);
+  }
+  // Note this sketch writes V1-V8
+  Serial.println();
+  delay(50);
+  //Turn off the power pin
+  digitalWrite(zPower, LOW);
+}
+//Serial.println();
 
 //Set safePin
 BLYNK_WRITE(V124) {
@@ -149,6 +210,16 @@ void setup() {
   Serial.begin(115200);
   Serial.println();
 
+
+  // Set up the select pins as outputs and start at 000:
+  for (int i = 0; i < 3; i++)
+  {
+    pinMode(selectPins[i], OUTPUT);
+    digitalWrite(selectPins[i], LOW);
+  }
+  pinMode(zInput, INPUT); // Set up Z as an input
+  pinMode(zPower, OUTPUT);
+  digitalWrite(zPower, LOW);
   /*clean FS, for testing
     JK - You need to format the SPIFFS to remove /config.json when
     creating or deleting custom parameters, otherwise the sketch will
@@ -288,8 +359,15 @@ void setup() {
   while (!Blynk.connected()) {
     //wait until Blynk is connected before proceeding to the loop()
   }
+  timer.setInterval(2000L, getAnalog);
   timer.setInterval(2000L, myDeviceStats);  // get stats every 10 seconds. Fine for basic knowledge
+
+  // Print the header: Comment out when working in Blynk
+//  Serial.println("Y0\tY1\tY2\tY3\tY4\tY5\tY6\tY7");
+//  Serial.println("---\t---\t---\t---\t---\t---\t---\t---");
+
 }
+
 
 void loop() {
   Blynk.run();
